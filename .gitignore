@@ -1,0 +1,16 @@
+*.log
+*.class
+*.jar
+logs/
+target/
+build/
+.gradle/
+*.iml
+.classpath
+.project
+.settings
+.idea/
+classes/
+secret.properties
+service.properties
+pid.pid
