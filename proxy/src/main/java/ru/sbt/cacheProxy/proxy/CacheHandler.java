@@ -8,6 +8,9 @@ import java.net.URL;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 import static java.util.Arrays.asList;
 
@@ -25,7 +28,7 @@ class CacheHandler implements InvocationHandler {
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        Object result = null;
+        Object result;
         if (!method.isAnnotationPresent(Cache.class)) return invoke(method, args);
         Cache checkParams = method.getAnnotation(Cache.class);
         if (memoryCache.keySet().isEmpty()) {
@@ -51,8 +54,11 @@ class CacheHandler implements InvocationHandler {
                 return invokeCache(method, args, updateConfig.listList(), fileName);
             }
             for (File file : cacheFilesList) {
+                if (fileName.substring(0, fileName.length() - 4).concat(".zip").endsWith(file.getName())) {
+                    return deserialise(method, fileName.substring(0, fileName.length() - 4).concat(".zip"));
+                }
                 if (fileName.endsWith(file.getName())) {
-                    return deserialise(fileName);
+                    return deserialise(method, fileName);
                 }
             }
             result = invokeCache(method, args, updateConfig.listList(), fileName);
@@ -107,7 +113,7 @@ class CacheHandler implements InvocationHandler {
         List<Object> result = null;
         for (List<Object> checkKey : memoryCache.keySet()) {
             List<Class> itemClasses = checkKey.stream().map((Function<Object,
-                    Class<? extends Object>>) Object::getClass).collect(Collectors.toList());
+                    Class<?>>) Object::getClass).collect(Collectors.toList());
             if (itemClasses.containsAll(asList(identityList))) {
                 checkStatus = isIdentity(args, checkKey, identityList);
             }
@@ -143,19 +149,24 @@ class CacheHandler implements InvocationHandler {
         return nameString.toString();
     }
 
-    private Object invokeCache(Method method, Object[] args, long cacheListSize, String fileName) throws Throwable{
+    private Object invokeCache(Method method, Object[] args, long cacheListSize, String fileName) throws Throwable {
         Object result = invoke(method, args);
         if (method.getReturnType() == List.class && cacheListSize > 0)
-            serialise(cachedList((List<Object>) result, cacheListSize), fileName);
-        else serialise(result, fileName);
+            serialise(method, cachedList((List<Object>) result, cacheListSize), fileName);
+        else serialise(method, result, fileName);
         return result;
     }
 
-    private void serialise(Object storedObject, String fileName) {
+    private void serialise(Method method, Object storedObject, String fileName) {
         try (ObjectOutputStream stream = new ObjectOutputStream(new FileOutputStream(fileName))) {
             File newFile = new File(fileName);
-            newFile.createNewFile();
+            if (newFile.createNewFile())
+                throw new RuntimeException("Unable to create new file");
             stream.writeObject(storedObject);
+            if (method.getAnnotation(Cache.class).useZip()) {
+                zipFile(fileName);
+                newFile.deleteOnExit();
+            }
         } catch (FileNotFoundException e) {
             throw new RuntimeException("Unable to create file in target destination, check path parameters", e);
         } catch (IOException e) {
@@ -163,22 +174,74 @@ class CacheHandler implements InvocationHandler {
         }
     }
 
-    private Object deserialise(String fileName) {
-        Object generatedObject = null;
-        try (ObjectInputStream stream = new ObjectInputStream(
-                new FileInputStream(fileName))) {
-            generatedObject = stream.readObject();
+    private void zipFile(String fileName) {
+        try (ZipOutputStream zipStream = new ZipOutputStream(new FileOutputStream(fileName.
+                substring(0, fileName.length() - 4) + ".zip"));
+             FileInputStream fileStream = new FileInputStream(fileName)) {
+            ZipEntry entry1 = new ZipEntry(fileName.substring(this.cacheSource.getPath().length()));
+            zipStream.putNextEntry(entry1);
+            byte[] buffer = new byte[fileStream.available()];
+            fileStream.read(buffer);
+            zipStream.write(buffer);
+            zipStream.closeEntry();
         } catch (FileNotFoundException e) {
             throw new RuntimeException("Cache file not exist, need to check source path, or file name", e);
         } catch (IOException e) {
-            throw new RuntimeException("Unable to dead data from source faie", e);
+            throw new RuntimeException("Unable to load data from source file", e);
+        }
+    }
+
+    private void unzipFile(String fileName) throws IOException {
+        ZipFile zipFile = new ZipFile(fileName);
+        Enumeration files = zipFile.entries();
+        File file;
+        while (files.hasMoreElements()) {
+            ZipEntry entry = (ZipEntry) files.nextElement();
+            InputStream zipFileInputStream = zipFile.getInputStream(entry);
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            file = new File(new File(this.cacheSource.getPath()).getAbsolutePath() + File.separator + entry.getName());
+            file.createNewFile();
+            try (FileOutputStream fileOutputStream = new FileOutputStream(file)) {
+                while ((bytesRead = zipFileInputStream.read(buffer)) != -1) {
+                    fileOutputStream.write(buffer, 0, bytesRead);
+                }
+                zipFileInputStream.close();
+            } catch (IOException e) {
+                throw new RuntimeException("Unable to load data from source file", e);
+            }
+        }
+    }
+
+    private Object deserialise(Method method, String fileName) {
+        String readFile = fileName.substring(0, fileName.length() - 4).concat(".cer");
+        Object generatedObject;
+        if (method.getAnnotation(Cache.class).useZip()) {
+            if (fileName.endsWith(".zip"))
+                try {
+                    unzipFile(fileName);
+                } catch (IOException e) {
+                    throw new RuntimeException("Unable to load data from source file", e);
+                }
+        }
+        try (ObjectInputStream stream = new ObjectInputStream(new FileInputStream(readFile))) {
+            generatedObject = stream.readObject();
+            if (method.getAnnotation(Cache.class).useZip()) {
+                File removeFile = new File(readFile);
+                removeFile.deleteOnExit();
+            }
+        } catch (FileNotFoundException e) {
+            throw new RuntimeException("Cache file not exist, need to check source path, or file name", e);
+        } catch (IOException e) {
+            throw new RuntimeException("Unable to load data from source file", e);
         } catch (ClassNotFoundException e) {
             throw new RuntimeException("Deserialising object not compatible. Need to check class version", e);
         }
+
         return generatedObject;
     }
 
-    private List<Object> cachedList(List<Object> baseList, long cacheSize){
-        return baseList.subList(0, (int)cacheSize);
+    private List<Object> cachedList(List<Object> baseList, long cacheSize) {
+        return baseList.subList(0, (int) cacheSize);
     }
 }
