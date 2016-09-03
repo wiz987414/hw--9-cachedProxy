@@ -73,8 +73,8 @@ class CacheHandler implements InvocationHandler {
         return result;
     }
 
-    private boolean identityCheck(Method method, Object[] args, Class[] identityList) {
-        for (List<Object> checkKey : memoryCache.keySet()) {
+    boolean identityCheck(Method method, Object[] args, Class[] identityList) {
+        for (List<Object> checkKey : getMemoryCache().keySet()) {
             List<Class> itemClasses = new ArrayList<>();
             for (Object listItem : checkKey) {
                 itemClasses.add(listItem.getClass());
@@ -97,7 +97,7 @@ class CacheHandler implements InvocationHandler {
         }
     }
 
-    private boolean isIdentity(Object[] args, List<Object> cacheArgs, Class[] identityList) {
+    boolean isIdentity(Object[] args, List<Object> cacheArgs, Class[] identityList) {
         boolean checkStatus = false;
         for (Object checkArg : args) {
             if (asList(identityList).contains(checkArg.getClass()) && cacheArgs.contains(checkArg))
@@ -123,7 +123,7 @@ class CacheHandler implements InvocationHandler {
         return result;
     }
 
-    private List<Object> key(Method method, Object[] args) {
+    List<Object> key(Method method, Object[] args) {
         List<Object> key = new ArrayList<>();
         key.add(method);
         key.addAll(asList(args));
@@ -244,4 +244,17 @@ class CacheHandler implements InvocationHandler {
     private List<Object> cachedList(List<Object> baseList, long cacheSize) {
         return baseList.subList(0, (int) cacheSize);
     }
+
+    Map<List<Object>, Object> getMemoryCache() {
+        return memoryCache;
+    }
+
+    boolean updateCache(List<Object> cacheList, Object value) {
+        if (!memoryCache.containsKey(cacheList)) {
+            memoryCache.put(cacheList, value);
+            return true;
+        }
+        return false;
+    }
+
 }
